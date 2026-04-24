@@ -115,91 +115,48 @@ $$C_{build} \cdot N_d + C_{query} \cdot N_s \log N_d < (2\pi \cdot 1) \cdot S \c
 
 ---
 
-## 7. 演进方案：基于 KD-Tree 的自适应网格优化
+## 7. 动态自适应算法深度解析：代码实现与数学原理
 
-### 7.1 数学推导：从 $O(N^2)$ 到 $O(N \log N)$
+### 7.1 自适应网格划分原理 (`grid.py`)
 
-目前的 `process_grid_chunk` 函数在每个网格块内部使用了双重循环：
-$$T_{current\_chunk} = n_s \cdot n_d \cdot C_{dist\_calc}$$
+动态算法的核心在于如何高效地管理非零点。`get_adaptive_grid_chunks` 函数通过以下步骤实现负载均衡与内存安全：
 
-**改进方案**：在网格块内部引入 **cKDTree**（Scipy 提供的 C 语言加速版 KD 树）。
+1.  **多级空间索引**：
+    -   **一级网格 (Density Grid)**：初始网格大小设为 $d/2$。此步通过 $O(N)$ 复杂度快速构建点密度分布图。
+    -   **二级分块 (Chunking)**：基于密度图，将相邻网格合并。合并目标是使每个块内的总点数接近 `target_points_per_chunk` ($N / (4 \times n\_jobs)$)，从而优化多进程并行效率。
+2.  **递归细分机制**：
+    -   **负载约束**：若单块点数超过 `max_points_per_chunk` (默认 50,000)，算法会递归执行二分切割。
+    -   **内存预估 (Memory Safeguard)**：
+        -   预估公式：$M_{est} = n_s \times n_d \times 4$ 字节 (float32)。
+        -   如果 $M_{est}$ 超过 `max_mem_per_chunk` (默认 2GB)，强制继续切分。这确保了在大距离、高密度场景下不会因构建庞大的局部连接矩阵而导致 OOM。
 
-**推导步骤**：
-1.  **建树 (Building)**：对需求点 $n_d$ 建立 KD 树。复杂度为 $O(n_d \log n_d)$。
-2.  **查询 (Querying)**：对每个供应点 $s \in n_s$，在树中执行半径查询（Radius Search）。
-    - 单次查询复杂度：$O(\log n_d + k)$，其中 $k$ 是落在距离范围内的邻居数。
-    - 总查询复杂度：$O(n_s \log n_d + K)$，其中 $K$ 是该网格内总边数。
-3.  **总复杂度比对**：
-    - **旧方案**：$T_{old} \propto n_s \cdot n_d$
-    - **新方案**：$T_{new} \propto (n_s + n_d) \log n_d + K$
+### 7.2 网格内加速策略 (`process.py`)
 
-**数学结论**：
-随着距离 $d$ 增大，网格内的点数 $n$ 迅速增加。当 $n > 1000$ 时，$n \log n$ 的增长速度远慢于 $n^2$。这意味着 KD-Tree 能够极大地缓解“大距离、高密度”场景下的计算压力。
+算法提供了两种处理模式，通过 `process_grid_chunk` 系列函数实现：
 
-### 7.2 代码实现：重构 `process_grid_chunk`
+#### 7.2.1 暴力循环模式 (v1)
+-   **逻辑**：在受限的网格块内执行双重 `for` 循环。
+-   **复杂度**：$T \approx \sum_{i=1}^G (n_{s,i} \cdot n_{d,i})$。
+-   **适用性**：当 $d$ 较小且点密度极低时，Python 的简单循环开销（由于 JIT 或编译器优化）在小规模数据上表现稳定。
 
-以下是结合现有代码逻辑的改进建议：
+#### 7.2.2 KD-Tree 空间索引模式 (v2)
+-   **逻辑**：
+    1.  对块内需求点 $n_d$ 构建 `cKDTree`。
+    2.  利用树搜索执行半径查询。
+    3.  **圆环过滤 (Ring Filtering)**：由于目标是 $[d-1, d]$ 区间，算法执行两次查询（$R_{max}$ 和 $R_{min}$），通过集合差集运算 `set(idx_outer) - set(idx_inner)` 提取精确连接。
+-   **栅格修正**：引入 $\frac{\sqrt{2}}{2}$ (约 0.707) 的修正系数，确保在离散栅格坐标下，圆环覆盖的像素中心点被正确包含。
 
-```python
-from scipy.spatial import cKDTree
+### 7.3 数学复杂度模型修正
 
-def process_grid_chunk_v2(grid_bounds, p_raster, n_raster, distance, Y):
-    # ... 前期筛选逻辑保持不变 ...
-    
-    # 1. 准备坐标数据
-    supply_coords = np.column_stack((grid_supply_rows, grid_supply_cols))
-    demand_coords = np.column_stack((grid_demand_rows, grid_demand_cols))
-    
-    # 2. 构建 KD 树 (对需求点进行索引)
-    tree = cKDTree(demand_coords)
-    
-    # 3. 执行半径查询 (查询范围 [d-1, d])
-    # 注意：query_ball_point 返回的是索引列表
-    indices_outer = tree.query_ball_point(supply_coords, distance + 0.707)
-    indices_inner = tree.query_ball_point(supply_coords, distance - 1 + 0.707)
-    
-    all_rows = []
-    all_cols = []
-    current_col = 0
-    
-    # 4. 处理结果，过滤出圆环区域 (distance-1, distance]
-    for i, (idx_out, idx_in) in enumerate(zip(indices_outer, indices_inner)):
-        # 落在圆环内的索引 = 落在外圆的索引 - 落在内圆的索引
-        ring_indices = set(idx_out) - set(idx_in)
-        
-        s_r, s_c = grid_supply_rows[i], grid_supply_cols[i]
-        source_idx = s_r * Y + s_c
-        
-        for d_idx in ring_indices:
-            d_r, d_c = grid_demand_rows[d_idx], grid_demand_cols[d_idx]
-            target_idx = d_r * Y + d_c
-            
-            all_rows.extend([target_idx, source_idx])
-            all_cols.extend([current_col, current_col])
-            current_col += 1
-            
-    return all_rows, all_cols, current_col
-```
+综合上述实现，动态算法的总时间复杂度 $T_{total}$ 建模为：
 
-### 7.3 方案评估：哪种方式最合理？
+$$T_{total} = T_{split} + T_{build} + T_{query}$$
 
-| 维度 | 传统算法 (Pixel) | 现有网格 (Grid) | 改进网格 (KD-Tree) |
-| :--- | :--- | :--- | :--- |
-| **小距离 ($d < 50$)** | **最优** (缓存利用率极高) | 一般 (点提取开销大) | 较慢 (建树开销大) |
-| **中距离 ($50-150$)** | 较慢 | **优** | 优 |
-| **大距离 ($d > 150$)** | 极慢 | 较慢 ($O(n^2)$ 瓶颈) | **最优** ($O(n \log n)$) |
-| **内存占用** | 高 (全地图数组) | 低 | 中 (需存储树结构) |
-| **实现难度** | 低 | 中 | 高 |
+1.  **划分开销**：$T_{split} = O(N)$。
+2.  **索引开销**：$T_{build} = \sum_{i=1}^G O(n_{d,i} \log n_{d,i})$。
+3.  **查询开销**：$T_{query} = \sum_{i=1}^G O(n_{s,i} \log n_{d,i} + K_i)$。
 
-**最终判断：**
-
-**最合理的改进方式是“三段式混合策略”：**
-
-1.  **极小距离 ($d < d_1$)**：维持**传统像素平移算法**。Numpy 的位运算在小偏移量下几乎不可逾越。
-2.  **中等距离 ($d_1 < d < d_2$)**：使用**现有网格分块算法**。此时每个桶内的点数较少，$O(n^2)$ 的暴力循环在 Python 原生开销面前并不突出，反而省去了建树的时间。
-3.  **巨大距离 ($d > d_2$)**：引入 **KD-Tree 优化**。当单个网格块内的点数 $n$ 超过阈值（如 $5000$）时，树查询的对数优势将彻底抵消建树开销。
-
-这种**混合架构**不仅兼顾了不同距离下的数学特性，还规避了单一算法在极端情况下的性能崩溃。
+在 $\rho$ 极小的情况下，由于 $G$ (网格数) 很大而 $n_i$ (块内点数) 极小，该算法复杂度接近于 $O(N \log N)$，远优于传统算法的 $O(d \cdot S)$。
 
 ---
 
