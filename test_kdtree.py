@@ -55,13 +55,13 @@ def test_kdtree_consistency():
     
     # 运行原方法
     start_time = time.time()
-    rows1, cols1, count1 = process_grid_chunk(grid_bounds, p_raster, n_raster, distance, Y)
+    rows1, cols1, count1 = process_grid_chunk(grid_bounds, p_raster, n_raster, distance, distance, Y)
     time1 = time.time() - start_time
     print(f"Original method: {count1} edges found, time: {time1:.4f}s")
     
     # 运行 KD-Tree 优化方法
     start_time = time.time()
-    rows2, cols2, count2 = process_grid_chunk_v2(grid_bounds, p_raster, n_raster, distance, Y)
+    rows2, cols2, count2 = process_grid_chunk_v2(grid_bounds, p_raster, n_raster, distance, distance, Y)
     time2 = time.time() - start_time
     print(f"KD-Tree method: {count2} edges found, time: {time2:.4f}s")
     

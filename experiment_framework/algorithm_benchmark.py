@@ -105,10 +105,10 @@ class AlgorithmBenchmark:
         supply_rows, supply_cols = np.nonzero(supply_raster)
         demand_rows, demand_cols = np.nonzero(demand_raster)
         start_time = time.time()
-        grid_chunks, _ = get_adaptive_grid_chunks(supply_rows, supply_cols, demand_rows, demand_cols, X, Y, distance, n_jobs)
+        grid_chunks, grid_size = get_adaptive_grid_chunks(supply_rows, supply_cols, demand_rows, demand_cols, X, Y, distance, n_jobs)
         col_offset = 0
         for grid_bounds in grid_chunks:
-            _, _, count = process_grid_chunk(grid_bounds, supply_raster, demand_raster, distance, Y)
+            _, _, count = process_grid_chunk(grid_bounds, supply_raster, demand_raster, distance, grid_size, Y)
             col_offset += count
         return time.time() - start_time, col_offset
 
@@ -117,10 +117,10 @@ class AlgorithmBenchmark:
         supply_rows, supply_cols = np.nonzero(supply_raster)
         demand_rows, demand_cols = np.nonzero(demand_raster)
         start_time = time.time()
-        grid_chunks, _ = get_adaptive_grid_chunks(supply_rows, supply_cols, demand_rows, demand_cols, X, Y, distance, n_jobs)
+        grid_chunks, grid_size = get_adaptive_grid_chunks(supply_rows, supply_cols, demand_rows, demand_cols, X, Y, distance, n_jobs)
         col_offset = 0
         for grid_bounds in grid_chunks:
-            _, _, count = process_grid_chunk_v2(grid_bounds, supply_raster, demand_raster, distance, Y)
+            _, _, count = process_grid_chunk_v2(grid_bounds, supply_raster, demand_raster, distance, grid_size, Y)
             col_offset += count
         return time.time() - start_time, col_offset
 

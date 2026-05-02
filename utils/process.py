@@ -68,9 +68,8 @@ def process_grid_chunk_v2(
     p_raster,
     n_raster,
     distance,
+    grid_size,
     Y,
-    supply_chunk_size=20000,
-    demand_chunk_size=20000,
 ):
     """处理单个网格块的函数，使用 KD-Tree 优化"""
     r0, r1, c0, c1 = grid_bounds
@@ -79,18 +78,19 @@ def process_grid_chunk_v2(
     supply_rows, supply_cols = np.nonzero(p_raster)
     demand_rows, demand_cols = np.nonzero(n_raster)
 
-    # 筛选出在当前网格内的供应点和需求点
+    # 筛选出在当前网格内的供应点（严格在块内，防止重复计数）
     supply_mask = (
-        (supply_rows >= r0 * distance)
-        & (supply_rows < r1 * distance)
-        & (supply_cols >= c0 * distance)
-        & (supply_cols < c1 * distance)
+        (supply_rows >= r0 * grid_size)
+        & (supply_rows < r1 * grid_size)
+        & (supply_cols >= c0 * grid_size)
+        & (supply_cols < c1 * grid_size)
     )
+    # 筛选出需求点（外扩 distance 范围，防止跨块漏算）
     demand_mask = (
-        (demand_rows >= r0 * distance)
-        & (demand_rows < r1 * distance)
-        & (demand_cols >= c0 * distance)
-        & (demand_cols < c1 * distance)
+        (demand_rows >= r0 * grid_size - distance)
+        & (demand_rows < r1 * grid_size + distance)
+        & (demand_cols >= c0 * grid_size - distance)
+        & (demand_cols < c1 * grid_size + distance)
     )
 
     grid_supply_rows = supply_rows[supply_mask]
@@ -119,13 +119,11 @@ def process_grid_chunk_v2(
     tree = cKDTree(demand_coords)
 
     # 执行半径查询
-    # query_ball_point 返回的是需求点在 grid_demand_rows 中的索引
     idx_outer = tree.query_ball_point(supply_coords, max_radius)
     idx_inner = tree.query_ball_point(supply_coords, min_radius)
 
     # 处理结果，过滤出圆环区域 (min_radius, max_radius]
     for i, (out_set, in_set) in enumerate(zip(idx_outer, idx_inner)):
-        # 使用 set 减法获取圆环内的点索引
         ring_indices = set(out_set) - set(in_set)
         
         s_r, s_c = grid_supply_rows[i], grid_supply_cols[i]
@@ -147,30 +145,29 @@ def process_grid_chunk(
     p_raster,
     n_raster,
     distance,
+    grid_size,
     Y,
-    supply_chunk_size=20000,
-    demand_chunk_size=20000,
 ):
-    """处理单个网格块的函数，直接返回结果，避免临时文件I/O"""
-    X = p_raster.shape[0]
+    """处理单个网格块的函数，暴力循环模式"""
     r0, r1, c0, c1 = grid_bounds
 
     # 提取网格内的供应点和需求点
     supply_rows, supply_cols = np.nonzero(p_raster)
     demand_rows, demand_cols = np.nonzero(n_raster)
 
-    # 筛选出在当前网格内的供应点和需求点
+    # 筛选出在当前网格内的供应点（严格在块内）
     supply_mask = (
-        (supply_rows >= r0 * distance)
-        & (supply_rows < r1 * distance)
-        & (supply_cols >= c0 * distance)
-        & (supply_cols < c1 * distance)
+        (supply_rows >= r0 * grid_size)
+        & (supply_rows < r1 * grid_size)
+        & (supply_cols >= c0 * grid_size)
+        & (supply_cols < c1 * grid_size)
     )
+    # 筛选出需求点（外扩 distance 范围）
     demand_mask = (
-        (demand_rows >= r0 * distance)
-        & (demand_rows < r1 * distance)
-        & (demand_cols >= c0 * distance)
-        & (demand_cols < c1 * distance)
+        (demand_rows >= r0 * grid_size - distance)
+        & (demand_rows < r1 * grid_size + distance)
+        & (demand_cols >= c0 * grid_size - distance)
+        & (demand_cols < c1 * grid_size + distance)
     )
 
     grid_supply_rows = supply_rows[supply_mask]
@@ -194,7 +191,7 @@ def process_grid_chunk(
     # 直接计算网格内的供应点和需求点之间的距离
     for s_r, s_c in zip(grid_supply_rows, grid_supply_cols):
         for d_r, d_c in zip(grid_demand_rows, grid_demand_cols):
-            dist_sq = calculate_distance_sq(s_r, s_c, d_r, d_c)
+            dist_sq = (s_r - d_r) ** 2 + (s_c - d_c) ** 2
             if min_sq <= dist_sq <= max_sq:
                 source_idx = s_r * Y + s_c
                 target_idx = d_r * Y + d_c
