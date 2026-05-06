@@ -19,7 +19,7 @@ def get_adaptive_grid_chunks(
 ):
     """自适应网格分块，递归细分大格子，预估内存，防止单块OOM"""
     if min_grid_size is None:
-        min_grid_size = max(distance // 2, distance, 20)  # 至少 20 或 distance
+        min_grid_size = max(distance, distance)  # 至少等于 distance，保证 halo 完整覆盖搜索半径
     
     grid_size = max(distance // 2, min_grid_size)
     density_grid = np.zeros((X // grid_size + 1, Y // grid_size + 1), dtype=np.int32)

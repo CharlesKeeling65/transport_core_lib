@@ -39,7 +39,7 @@ def calculate_dynamic_threshold(
     n_demand,
     n_jobs=8,
     total_pixels=44102097,
-    K=150.0,
+    K=400.0,
     d_min=10,
     d_max=200,
 ):
