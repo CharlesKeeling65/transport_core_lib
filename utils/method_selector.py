@@ -34,6 +34,25 @@ def estimate_adaptive_method_time(distance, n_supply, n_demand, n_jobs):
     return estimated_time
 
 
+def select_faster_method(
+    distance,
+    n_supply,
+    n_demand,
+    n_jobs,
+):
+    """
+    方案 A：直接成本比较器（Cost-Based Optimizer）
+    
+    直接比较传统方法和自适应方法的估算耗时，选择更快的那个。
+    
+    返回：
+        'traditional' 或 'adaptive'
+    """
+    trad_time = estimate_traditional_method_time(distance, n_supply, n_demand)
+    adaptive_time = estimate_adaptive_method_time(distance, n_supply, n_demand, n_jobs)
+    return 'traditional' if trad_time <= adaptive_time else 'adaptive'
+
+
 def calculate_dynamic_threshold(
     n_supply,
     n_demand,
