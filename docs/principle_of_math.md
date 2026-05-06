@@ -71,7 +71,15 @@ $$T_{adapt}(d) = G \cdot (n_s \cdot n_d \cdot C_{pt}) \approx \frac{S}{d^2} \cdo
 
 - **传统算法**是“暴力”但高效的像素处理，其性能受制于**距离的线性增长**，适合近距离运输。
 - **动态自适应算法**是“智能”的点对点处理，其性能受益于**数据的稀疏性**，能够跳过海量无效像素，在大范围搜索中具有压倒性优势。
-- **动态阈值选择**（如代码中的 `calculate_dynamic_threshold`）正是基于这种数学权衡，根据地图密度 $\rho$ 自动选择最优执行路径。
+- **动态阈值选择（混合 Traditional vs KD-Tree）**：实现中 `calculate_dynamic_threshold` 已**不再使用**按 $\rho$ 分段的常数阈值表，而是基于两条路径的**成本模型交叉点**给出解析切换距离 $d^\star$。令 $XY$ 为栅格像素数、$N=N_s+N_d$、占空比 $\rho=N/XY$，主导项尺度下
+  $$
+  T_{\mathrm{traditional}} \propto d \cdot XY,\qquad T_{\mathrm{kdtree}} \propto \frac{N\log_2 N}{n_{\mathrm{jobs}}}.
+  $$
+  令 $T_{\mathrm{traditional}}=T_{\mathrm{kdtree}}$，得到闭合式（与代码一致）：
+  $$
+  d^\star = K \cdot \frac{\rho \cdot \log_2 N}{n_{\mathrm{jobs}}},
+  $$
+  其中 $K=\beta/\alpha$ 吸收两路径的有效机器常数比，经标定后固定或按实验更新；$d^\star$ 再经上下限裁剪以保证极端 $\rho$ 下的稳健性。等价地，也可用双常数 $(C_t, c_{\mathrm{kdt}})$ 对两条路径做**直接耗时估算**并取 $\operatorname*{arg\,min}$，决策边界与上式在相同假设下一致（详见 `动态阈值修改建议.md`）。
 
 ---
 
@@ -179,7 +187,7 @@ $$T_{total} = T_{split} + T_{build} + T_{query}$$
 
 **关键发现**：
 1. **耗时线性膨胀**：即使随着迭代进行，剩余点数在减少，但由于 $d$ 增加导致的偏移量扫描次数 $N_{off} \approx 2\pi d$ 呈线性增长，使得 `connect` 阶段逐渐成为总任务的瓶颈。
-2. **阈值偏晚**：当前代码设定 $d > 70$ 才切换算法。在 20km 时耗时已达 3.5 分钟，若不进行优化，在 50-70km 区间将面临严重的性能衰退。
+2. **固定切换距离的风险**：部分历史管线曾采用**固定**大距离阈值（例如 $d>70$ 才切换）做实验对比；在仅传统全栅格路径时，20km 耗时已达 3.5 分钟量级，若仍延迟切换将在中距离段出现明显瓶颈。**现行 Hybrid-TKD** 中切换距离改为**数据依赖**的 $d^\star$（含 $\rho$、$N$、$n_{\mathrm{jobs}}$），可避免单一常数在全数据集上系统性偏早/偏晚。
 
 ## 9. 最终落地改进方案 (基于现有 `utils` 结构)
 
@@ -193,13 +201,20 @@ $$T_{total} = T_{split} + T_{build} + T_{query}$$
 - **优势**：将网格内部的查询复杂度从平方级降低到对数级 $O(\log n)$。
 - **注意**：由于我们需要计算圆环 $[d-1, d]$，应使用两次 `query_ball_point` 或一次查询后进行距离过滤。
 
-### 9.2 优化 `method_selector.py` 的算法决策
+### 9.2 `method_selector.py` 与解析动态阈值（已与代码同步）
 
-当前的 [calculate_dynamic_threshold](file:///home/wangyb/Project/Proj_Manure/code/transport/utils/method_selector.py#L26) 仅基于密度。
+[`calculate_dynamic_threshold`](file:///home/wangyb/Project/Proj_Manure/code/transport/core/utils/method_selector.py) 已实现为**成本交叉点**的解析式（方案 B），输入包含 `n_supply`, `n_demand`, `n_jobs`, `total_pixels`，以及标定常数 `K` 与裁剪界 `d_min`, `d_max`：
 
-**改进方案**：
-1. **下调分界点**：在引入 KD-Tree 优化后，网格算法的竞争力将大幅提前。建议将 $d$ 的切换阈值从硬编码的 70 下调至 **30-40** 左右。
-2. **引入 KD-Tree 成本模型**：在 `estimate_adaptive_method_time` 中加入建树开销 $O(n \log n)$ 的估算模型。
+$$
+d^\star = \mathrm{clip}\!\left(K \cdot \frac{\rho \cdot \log_2 N}{n_{\mathrm{jobs}}},\; d_{\min},\; d_{\max}\right),\quad \rho=\frac{N}{XY},\ N=N_s+N_d.
+$$
+
+**设计要点**：
+1. **连续依赖**：$d^\star$ 随 $\rho$、$N$、$n_{\mathrm{jobs}}$ 平滑变化，消除了旧版分段密度表的**不连续跳变**与缺乏理论依据的问题。
+2. **并行显式进入分母**：$n_{\mathrm{jobs}}$ 增大时 $d^\star$ 减小，更符合 KD-Tree 分块并行路径的相对优势。
+3. **论文/工程扩展（方案 A）**：可用 $T_{\mathrm{trad}}\approx C_t\, d\, XY$ 与 $T_{\mathrm{kdt}}\approx c_{\mathrm{kdt}}\, N\log_2 N/n_{\mathrm{jobs}}$ 做每次调用的 $\operatorname*{arg\,min}$，与上式 $d^\star$ 在模型一致时等价；标定 $K$ 或 $(C_t,c_{\mathrm{kdt}})$ 的流程见 `动态阈值修改建议.md`。
+
+`estimate_traditional_method_time` / `estimate_adaptive_method_time` 仍为**粗粒度启发式**，若需与论文模型严格对齐，可逐步改为与上节 $T_{\mathrm{traditional}}$、$T_{\mathrm{kdtree}}$ 主导项一致的参数化形式。
 
 ### 9.3 内存安全：广播机制替换
 
@@ -210,4 +225,4 @@ $$T_{total} = T_{split} + T_{build} + T_{query}$$
 - 采用 **"Build once, Query multiple"** 模式，即对整个 Grid Chunk 构建一次树，然后分批处理供应点，确保内存占用始终在安全范围内。
 
 ---
-**结论**：当前的 `connect` 耗时增长趋势证实了传统算法在大距离下的局限性。通过在现有 `utils` 框架下嵌入 **KD-Tree 空间索引**，并配合**更激进的算法切换阈值**，可以显著提升系统的整体吞吐量。
+**结论**：日志所反映的 `connect` 耗时随 $d$ 近线性膨胀，证实了传统全栅格路径在大距离下的瓶颈。在 `utils` 框架下嵌入 **KD-Tree 空间索引**，并采用**由成本模型给出的解析切换距离 $d^\star$**（替代经验分段或单一固定 km 阈值），可在保持实现简洁的同时使切换点随数据规模与并行度自适应，整体吞吐量更稳。

@@ -7,8 +7,8 @@
 ## 1. Abstract
 - **Background:** Large-scale spatial supply-demand matching in manure transport optimization.
 - **Problem:** Computational inefficiency of traditional pixel-translation algorithms at large distances and the limitations of basic adaptive grid methods.
-- **Methodology:** Introduction of a KD-Tree optimized adaptive grid algorithm and a two-stage hybrid strategy (Traditional + KD-Tree Optimized).
-- **Key Findings:** KD-Tree optimization achieves 3-5x speedup for distances $d > 70$ km. The hybrid strategy provides optimal efficiency across all distance ranges.
+- **Methodology:** Introduction of a KD-Tree optimized adaptive grid algorithm and a two-stage hybrid strategy (Hybrid-TKD: Traditional raster offsets vs.\ KD-Tree per chunk). Switching uses a **cost-crossing analytical threshold** $d^\star = K \rho \log_2 N / n_{\mathrm{jobs}}$ (clipped to $[d_{\min},d_{\max}]$), replacing ad hoc density staircases; optional dual-constant cost comparator is decision-equivalent under the same asymptotic model.
+- **Key Findings:** KD-Tree optimization yields large speedups at medium-to-large effective search radii (magnitude depends on raster size and point density). The hybrid strategy uses a **data-dependent** switching distance $d^\star$ (cost-crossing model), improving robustness versus a single fixed distance cutoff.
 - **Contribution:** A novel spatial indexing approach for large-scale manure distribution logistics.
 
 ---
@@ -16,8 +16,8 @@
 ## 2. Introduction
 - **1.1 Motivation:** Strategic importance of manure resource utilization and precision agriculture.
 - **1.2 Research Questions:** 
-    - How to dynamically determine the optimal algorithm switching threshold?
-    - Can KD-Tree indexing consistently outperform traditional grid-based methods in high-density scenarios?
+    - How to **derive** the hybrid switching distance $d^\star$ from explicit time models (including parallelism $n_{\mathrm{jobs}}$ and occupancy $\rho=N/XY$) rather than hand-tuned density bins?
+    - Under which data regimes does the KD-Tree path dominate the full-raster path, and how do empirical timings align with the predicted crossing?
 - **1.3 Objectives:** Develop a standardized benchmarking framework and an adaptive algorithm selector.
 
 ---
@@ -25,10 +25,14 @@
 ## 3. Methodology
 - **3.1 Problem Definition:** Mathematical formulation of the spatial matching problem.
 - **3.2 Algorithm Complexity Analysis:**
-    - **Traditional:** $O(d \times S)$
-    - **Adaptive Grid:** $O(\rho_s \rho_d \times S \times d^2)$
-    - **KD-Tree Optimized:** $O(N \log N)$
-- **3.3 Hybrid Strategy:** Two-stage switching mechanism based on distance and data density.
+    - **Traditional (full raster per ring offset):** dominant work $\propto N_{\mathrm{off}}(d)\cdot XY \approx 2\pi d \cdot XY$ (independent of point density at leading order).
+    - **Adaptive Grid (legacy point-based chunking):** $O(\rho_s \rho_d \times S \times d^2)$ style scaling when brute-force within chunks.
+    - **KD-Tree Optimized (per-chunk v2):** build + query dominated by $O(N\log N)$ aggregated across chunks, mitigated by $n_{\mathrm{jobs}}$.
+- **3.3 Hybrid Strategy (Hybrid-TKD):** Choose Traditional if $d \le d^\star$, else KD-Tree path, with
+  $$
+  d^\star = K \cdot \frac{\rho \cdot \log_2 N}{n_{\mathrm{jobs}}},\quad \rho=\frac{N}{XY},\ N=S+D,
+  $$
+  implemented as `calculate_dynamic_threshold` (single calibrated ratio $K=\beta/\alpha$ between effective machine constants, plus $d_{\min}, d_{\max}$ guards). **Optional extension (Methods/Appendix):** cost-based selector $\operatorname*{arg\,min}\{C_t d\,XY,\; c_{\mathrm{kdt}} N\log_2 N / n_{\mathrm{jobs}}\}$—same crossing structure, two measured constants. Full derivation, calibration, and Scheme A vs.\ B discussion: `transport_core_lib/docs/动态阈值修改建议.md`.
 - **3.4 Convergence and Correctness Proofs.**
 
 ---
