@@ -89,3 +89,10 @@ def calculate_dynamic_threshold(
     d_star = K * density * log_n / max(n_jobs, 1)
     
     return int(np.clip(d_star, d_min, d_max))
+
+
+def select_faster_method(distance, n_supply, n_demand, n_jobs):
+    """直接比较传统方法和自适应方法的预估时间，返回 'traditional' 或 'adaptive'"""
+    trad_time = estimate_traditional_method_time(distance, n_supply, n_demand)
+    adapt_time = estimate_adaptive_method_time(distance, n_supply, n_demand, n_jobs)
+    return 'traditional' if trad_time <= adapt_time else 'adaptive'
