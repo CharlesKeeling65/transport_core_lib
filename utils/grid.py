@@ -15,9 +15,13 @@ def get_adaptive_grid_chunks(
     n_jobs,
     max_points_per_chunk=50000,
     max_mem_per_chunk=2 * 1024**3,  # 2GB
+    min_grid_size=None,
 ):
     """自适应网格分块，递归细分大格子，预估内存，防止单块OOM"""
-    grid_size = distance // 2
+    if min_grid_size is None:
+        min_grid_size = max(distance // 2, distance, 20)  # 至少 20 或 distance
+    
+    grid_size = max(distance // 2, min_grid_size)
     density_grid = np.zeros((X // grid_size + 1, Y // grid_size + 1), dtype=np.int32)
     supply_grid_pos = (supply_rows // grid_size, supply_cols // grid_size)
     demand_grid_pos = (demand_rows // grid_size, demand_cols // grid_size)
